@@ -1,0 +1,139 @@
+#include "WiFiS3.h"
+
+char ssid[] = "gp_theremin";
+char pass[] = "theremin5A";
+
+WiFiClient client;
+WiFiServer webServer(80);
+
+const int pinSensoreHW486 = A0;
+
+int valoreHW486 = 0;
+float tensioneHW486 = 0.0;
+int statoHW505Code = -1;
+unsigned long ultimaLetturaArduino1 = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1500);
+  pinMode(pinSensoreHW486, INPUT);
+
+  Serial.println("=== AVVIO RICEVITORE + WEB DASHBOARD (ARDUINO 2) ===");
+
+  while (WiFi.begin(ssid, pass) != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Cerco la rete 'gp_theremin'...");
+  }
+
+  while (WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
+    delay(200);
+  }
+
+  webServer.begin();
+
+  Serial.println(">>> CONNESSO ALLA RETE WI-FI! <<<");
+  Serial.print("APRI QUESTO INDIRIZZO SUL TELEFONO: http://");
+  Serial.println(WiFi.localIP());
+}
+
+void loop() {
+  if (millis() - ultimaLetturaArduino1 >= 250) {
+    ultimaLetturaArduino1 = millis();
+
+    long somma = 0;
+    for (int i = 0; i < 5; i++) {
+      somma += analogRead(pinSensoreHW486);
+      delay(2);
+    }
+    valoreHW486 = somma / 5;
+    tensioneHW486 = valoreHW486 * (5.0 / 1023.0);
+
+    if (client.connect(WiFi.gatewayIP(), 8080)) {
+      client.print("R");
+      unsigned long attesa = millis();
+      while (!client.available() && millis() - attesa < 300) {
+        delay(2);
+      }
+      if (client.available()) {
+        char c = client.read();
+        if (c == '1') statoHW505Code = 1;
+        else if (c == '0') statoHW505Code = 0;
+        else statoHW505Code = -1;
+      } else {
+        statoHW505Code = -1;
+      }
+      client.stop();
+    } else {
+      statoHW505Code = -1;
+    }
+
+    Serial.print("HW-505: ");
+    Serial.print(statoHW505Code == 1 ? "INCLINATO (1)" : (statoHW505Code == 0 ? "DRITTO (0)" : "ERRORE"));
+    Serial.print(" | HW-486: ");
+    Serial.println(valoreHW486);
+  }
+
+  WiFiClient browser = webServer.available();
+  if (browser) {
+    String richiesta = "";
+    unsigned long timeout = millis();
+    while (browser.connected() && millis() - timeout < 500) {
+      if (browser.available()) {
+        char c = browser.read();
+        richiesta += c;
+        if (c == '\n' && richiesta.endsWith("\r\n\r\n")) break;
+      }
+    }
+
+    if (richiesta.indexOf("GET /dati") >= 0) {
+      browser.println("HTTP/1.1 200 OK");
+      browser.println("Content-Type: application/json");
+      browser.println("Access-Control-Allow-Origin: *");
+      browser.println("Connection: close");
+      browser.println();
+      browser.print("{\"hw505\":");
+      browser.print(statoHW505Code);
+      browser.print(",\"hw486\":");
+      browser.print(valoreHW486);
+      browser.print(",\"volt\":");
+      browser.print(tensioneHW486, 2);
+      browser.println("}");
+    } else {
+      inviaPaginaHTML(browser);
+    }
+
+    delay(5);
+    browser.stop();
+  }
+}
+
+void inviaPaginaHTML(WiFiClient &browser) {
+  browser.println("HTTP/1.1 200 OK");
+  browser.println("Content-Type: text/html; charset=UTF-8");
+  browser.println("Connection: close");
+  browser.println();
+  browser.print("\x3C!DOCTYPE html\x3E\x3Chtml lang='it'\x3E\x3Chead\x3E");
+  browser.print("\x3Cmeta charset='UTF-8'\x3E");
+  browser.print("\x3Cmeta name='viewport' content='width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no'\x3E");
+  browser.print("\x3Ctitle\x3EMonitor Sensori\x3C/title\x3E\x3Cstyle\x3E");
+  browser.print("*{box-sizing:border-box;margin:0;padding:0;font-family:sans-serif}");
+  browser.print("body{background:#0f172a;color:#f8fafc;padding:16px;display:flex;flex-direction:column;gap:16px;min-height:100vh}");
+  browser.print("header{text-align:center;padding:8px 0}h1{font-size:1.3rem;color:#38bdf8}p{font-size:0.85rem;color:#94a3b8;margin-top:4px}");
+  browser.print(".card{background:#1e293b;border-radius:16px;padding:20px;border:1px solid #334155}");
+  browser.print(".label{font-size:0.8rem;text-transform:uppercase;color:#94a3b8;margin-bottom:8px}");
+  browser.print(".badge{padding:12px;border-radius:12px;font-size:1.4rem;font-weight:800;width:100%;text-align:center}");
+  browser.print(".dritto{background:#064e3b;color:#34d399;border:1px solid #059669}");
+  browser.print(".inclinato{background:#7c2d12;color:#fb923c;border:1px solid #ea580c}");
+  browser.print(".errore{background:#7f1d1d;color:#f87171;border:1px solid #dc2626}");
+  browser.print(".val{font-size:2.2rem;font-weight:800}.sub{font-size:1rem;color:#38bdf8;margin-left:8px}");
+  browser.print(".bar-bg{width:100%;height:14px;background:#0f172a;border-radius:999px;overflow:hidden;margin-top:14px}");
+  browser.print(".bar-fill{height:100%;width:0%;background:#38bdf8;transition:width 0.2s}");
+  browser.print(".dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px}");
+  browser.print("footer{text-align:center;font-size:0.75rem;color:#64748b;margin-top:auto}");
+  browser.print("\x3C/style\x3E\x3C/head\x3E\x3Cbody\x3E");
+  browser.print("\x3Cheader\x3E\x3Ch1\x3EMonitor Sensori Live\x3C/h1\x3E");
+  browser.print("\x3Cp\x3E\x3Cspan class='dot' id='dot'\x3E\x3C/span\x3E\x3Cspan id='conn'\x3EConnessione...\x3C/span\x3E\x3C/p\x3E\x3C/header\x3E");
+  browser.print("\x3Cdiv class='card'\x3E\x3Cdiv class='label'\x3ESensore HW-505 (Arduino 1)\x3C/div\x3E");
+  browser.print("\x3Cdiv id='s505' class='badge errore'\x3EIN ATTESA...\x3C/div\x3E\x3C/div\x3E");
+  browser.print("\x3Cdiv class='card'\x3E\x3Cdiv class='label'\x3ESensore HW-486 (Arduino 2)\x3C/div\x3E");
+  browser.print("\x3Cdiv\x3E\x3Cspan class='val' id='v486'\x3E0\x3C/
